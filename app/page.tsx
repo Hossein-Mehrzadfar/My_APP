@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -8,18 +7,15 @@ import {
   ParticipantTile,
   RoomAudioRenderer,
   useTracks,
-  PreJoin
 } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { Track } from "livekit-client";
+import { Track, TrackPublication } from "livekit-client";
 import { useEffect, useState } from "react";
 
 export default function Page() {
   const [token, setToken] = useState("");
-  const [userChoices, setUserChoices] = useState(null);
-  const iD = Math.floor(Math.random() * 100)
-
-
+  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const iD = Math.floor(Math.random() * 100);
 
   useEffect(() => {
     (async () => {
@@ -33,16 +29,27 @@ export default function Page() {
         console.error(e);
       }
     })();
+
+    // Establish WebSocket connection to the transcription service
+    const ws = new WebSocket("wss://api.rev.ai/speechtotext/v1/stream?access_token=<02593g2xwbXh09rpt3HATZRI0B4XoOg35eDaZBy0VUWsJUo1tRvYtpB27tYEdST9wOTHyZahRfFbIdMiFVDbbjga71TNA>&content_type=audio/x-raw;layout=interleaved;rate=16000;format=S16LE;channels=1&metadata=<METADATA>");
+    ws.onopen = () => {
+      console.log("WebSocket connection established with transcription service");
+    };
+    ws.onclose = () => {
+      console.log("WebSocket connection to transcription service closed");
+    };
+    setSocket(ws);
+
+    return () => {
+      ws.close();
+    };
   }, []);
 
   if (token === "") {
     return <div>Getting token...</div>;
   }
 
-  
-
   return (
-    
     <LiveKitRoom
       video={true}
       audio={true}
@@ -51,23 +58,44 @@ export default function Page() {
       data-lk-theme="default"
       style={{ height: '100dvh' }}
     >
-      <MyVideoConference />
+      <MyVideoConference socket={socket} />
       <RoomAudioRenderer />
       <ControlBar />
     </LiveKitRoom>
-    
   );
 }
 
-function MyVideoConference() {
-
+function MyVideoConference({ socket }: { socket: WebSocket | null }) {
   const tracks = useTracks(
     [
-      { source: Track.Source.Camera, withPlaceholder: true },
-      { source: Track.Source.ScreenShare, withPlaceholder: false },
+      { source: Track.Source.Microphone, withPlaceholder: true },
     ],
-    { onlySubscribed: false },
+    { onlySubscribed: true },
   );
+
+  useEffect(() => {
+    if (socket && tracks) {
+      tracks.forEach(trackReference => {
+        const trackPub = trackReference.publication as TrackPublication | undefined;
+        if (trackPub && trackPub.track && trackPub.track.kind === "audio") {
+          const audioTrack = trackPub.track.mediaStreamTrack;
+
+          // Create a MediaStream from the audio track
+          const audioStream = new MediaStream([audioTrack]);
+
+          // Use MediaRecorder to capture audio data
+          const recorder = new MediaRecorder(audioStream);
+          recorder.ondataavailable = (event) => {
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(event.data);
+            }
+          };
+          recorder.start(100); // Record in chunks of 100ms
+        }
+      });
+    }
+  }, [socket, tracks]);
+
   return (
     <GridLayout tracks={tracks} style={{ height: 'calc(100vh - var(--lk-control-bar-height))' }}>
       <ParticipantTile />
